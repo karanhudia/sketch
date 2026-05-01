@@ -60,6 +60,20 @@ export interface SlackMessage {
 
 export type SlackMessageHandler = (message: SlackMessage) => Promise<void>;
 
+export interface AppHomeOpenedEvent {
+  slackUserId: string;
+}
+
+export type AppHomeOpenedHandler = (event: AppHomeOpenedEvent) => Promise<void>;
+
+export interface HomeActionEvent {
+  slackUserId: string;
+  actionId: string;
+  value: string;
+}
+
+export type HomeActionHandler = (event: HomeActionEvent) => Promise<void>;
+
 export interface SlackBotConfig {
   mode: "socket" | "http";
   botToken: string;
@@ -76,6 +90,8 @@ export class SlackBot {
   private handler: SlackMessageHandler | null = null;
   private mentionHandler: SlackMessageHandler | null = null;
   private threadMessageHandler: SlackMessageHandler | null = null;
+  private appHomeOpenedHandler: AppHomeOpenedHandler | null = null;
+  private homeActionHandler: HomeActionHandler | null = null;
   private botUserId: string | null = null;
   private seenEvents = new Map<string, number>();
   private seenEventsTimer: ReturnType<typeof setInterval> | null = null;
@@ -133,6 +149,14 @@ export class SlackBot {
     this.threadMessageHandler = handler;
   }
 
+  onAppHomeOpened(handler: AppHomeOpenedHandler): void {
+    this.appHomeOpenedHandler = handler;
+  }
+
+  onHomeAction(handler: HomeActionHandler): void {
+    this.homeActionHandler = handler;
+  }
+
   async start(): Promise<void> {
     const auth = await this.app.client.auth.test();
     this.botUserId = auth.user_id ?? null;
@@ -166,6 +190,7 @@ export class SlackBot {
           userId: message.user,
           channelId: message.channel,
           ts: message.ts,
+          ...(threadTs ? { threadTs } : {}),
           ...(files.length > 0 && { files }),
         });
         return;
@@ -223,6 +248,34 @@ export class SlackBot {
         threadTs: event.thread_ts,
         ...(files.length > 0 && { files }),
       });
+    });
+
+    this.app.event("app_home_opened", async ({ event }) => {
+      if (!this.appHomeOpenedHandler) return;
+      const tab = (event as { tab?: string }).tab;
+      if (tab && tab !== "home") return;
+      const userId = (event as { user?: string }).user;
+      if (!userId) return;
+      try {
+        await this.appHomeOpenedHandler({ slackUserId: userId });
+      } catch (err) {
+        this.logger.warn({ err, slackUserId: userId }, "app_home_opened handler failed");
+      }
+    });
+
+    this.app.action(/^home:.+/, async ({ body, action, ack }) => {
+      await ack();
+      if (!this.homeActionHandler) return;
+      const slackUserId = (body as { user?: { id?: string } }).user?.id;
+      if (!slackUserId) return;
+      const actionId = (action as { action_id?: string }).action_id ?? "";
+      const selected = (action as { selected_option?: { value?: string } }).selected_option;
+      const value = selected?.value ?? (action as { value?: string }).value ?? "";
+      try {
+        await this.homeActionHandler({ slackUserId, actionId, value });
+      } catch (err) {
+        this.logger.warn({ err, slackUserId, actionId }, "home action handler failed");
+      }
     });
 
     if (this.mode === "socket") {
@@ -312,6 +365,35 @@ export class SlackBot {
       ts,
       text,
     });
+  }
+
+  async setAssistantStatus(
+    channelId: string,
+    threadTs: string,
+    status: string,
+    loadingMessages?: readonly string[],
+  ): Promise<void> {
+    try {
+      await this.app.client.assistant.threads.setStatus({
+        channel_id: channelId,
+        thread_ts: threadTs,
+        status,
+        ...(loadingMessages && loadingMessages.length > 0 ? { loading_messages: [...loadingMessages] } : {}),
+      });
+    } catch (err) {
+      this.logger.warn({ err, channelId, threadTs }, "Slack assistant.threads.setStatus failed");
+    }
+  }
+
+  async publishHomeView(slackUserId: string, view: { type: "home"; blocks: Record<string, unknown>[] }): Promise<void> {
+    try {
+      await this.app.client.views.publish({
+        user_id: slackUserId,
+        view: view as unknown as Parameters<typeof this.app.client.views.publish>[0]["view"],
+      });
+    } catch (err) {
+      this.logger.warn({ err, slackUserId }, "Slack views.publish failed");
+    }
   }
 
   async addReaction(channelId: string, ts: string, emoji: string): Promise<void> {
