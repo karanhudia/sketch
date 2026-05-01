@@ -8,7 +8,7 @@ import type { Kysely } from "kysely";
 import { type InboxMessageContext, buildSketchContext } from "../agent/prompt";
 import type { AgentResult, McpServerConfig, RunAgentParams } from "../agent/runner";
 import { deleteSessionId, getSessionId } from "../agent/sessions";
-import { ASSISTANT_SHIMMER_POOL, createProgressRenderer, getProgressTransportStrategy } from "../agent/tool-progress";
+import { createProgressRenderer, getProgressTransportStrategy } from "../agent/tool-progress";
 import { ensureChannelWorkspace, ensureWorkspace } from "../agent/workspace";
 import {
   REASONING_TEXT_OPTIONS,
@@ -203,55 +203,53 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
     return { ids: rows.map((row) => row.id), messages };
   };
 
-  if (config.EXPERIMENTAL_FLAG) {
-    const publishHomeForUser = async (slackUserId: string): Promise<void> => {
-      let user: Awaited<ReturnType<typeof resolveUser>>;
-      try {
-        user = await resolveUser(slackUserId);
-      } catch (err) {
-        logger.warn({ err, slackUserId }, "Home tab: failed to resolve user");
-        return;
-      }
-      const settingsRow = await repos.settings.get();
-      const progress = resolveProgressDisplaySettings(user);
-      const view = buildHomeView({
-        realName: user.name,
-        email: user.email ?? null,
-        workspaceName: settingsRow?.org_name ?? null,
-        toolProgress: progress.toolProgress,
-        reasoningText: progress.reasoningText,
-      });
-      await slackBot.publishHomeView(slackUserId, view);
-    };
-
-    slackBot.onAppHomeOpened(async (event) => {
-      await publishHomeForUser(event.slackUserId);
+  const publishHomeForUser = async (slackUserId: string): Promise<void> => {
+    let user: Awaited<ReturnType<typeof resolveUser>>;
+    try {
+      user = await resolveUser(slackUserId);
+    } catch (err) {
+      logger.warn({ err, slackUserId }, "Home tab: failed to resolve user");
+      return;
+    }
+    const settingsRow = await repos.settings.get();
+    const progress = resolveProgressDisplaySettings(user);
+    const view = buildHomeView({
+      realName: user.name,
+      email: user.email ?? null,
+      workspaceName: settingsRow?.org_name ?? null,
+      toolProgress: progress.toolProgress,
+      reasoningText: progress.reasoningText,
     });
+    await slackBot.publishHomeView(slackUserId, view);
+  };
 
-    slackBot.onHomeAction(async (event) => {
-      let user: Awaited<ReturnType<typeof resolveUser>>;
-      try {
-        user = await resolveUser(event.slackUserId);
-      } catch (err) {
-        logger.warn({ err, slackUserId: event.slackUserId, actionId: event.actionId }, "Home action: resolve failed");
-        return;
+  slackBot.onAppHomeOpened(async (event) => {
+    await publishHomeForUser(event.slackUserId);
+  });
+
+  slackBot.onHomeAction(async (event) => {
+    let user: Awaited<ReturnType<typeof resolveUser>>;
+    try {
+      user = await resolveUser(event.slackUserId);
+    } catch (err) {
+      logger.warn({ err, slackUserId: event.slackUserId, actionId: event.actionId }, "Home action: resolve failed");
+      return;
+    }
+
+    if (event.actionId === HOME_ACTION_TOOL_PROGRESS) {
+      const value = event.value;
+      if (TOOL_PROGRESS_OPTIONS.includes(value as ToolProgressCommand)) {
+        await repos.users.update(user.id, { toolProgress: value });
       }
-
-      if (event.actionId === HOME_ACTION_TOOL_PROGRESS) {
-        const value = event.value;
-        if (TOOL_PROGRESS_OPTIONS.includes(value as ToolProgressCommand)) {
-          await repos.users.update(user.id, { toolProgress: value });
-        }
-      } else if (event.actionId === HOME_ACTION_REASONING_TEXT) {
-        const value = event.value;
-        if (REASONING_TEXT_OPTIONS.includes(value as ReasoningTextCommand)) {
-          await repos.users.update(user.id, { reasoningText: value === "on" });
-        }
+    } else if (event.actionId === HOME_ACTION_REASONING_TEXT) {
+      const value = event.value;
+      if (REASONING_TEXT_OPTIONS.includes(value as ReasoningTextCommand)) {
+        await repos.users.update(user.id, { reasoningText: value === "on" });
       }
+    }
 
-      await publishHomeForUser(event.slackUserId);
-    });
-  }
+    await publishHomeForUser(event.slackUserId);
+  });
 
   // DM handler
   slackBot.onMessage(async (message) => {
@@ -364,7 +362,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         );
       }
 
-      const isAssistantPaneDm = config.EXPERIMENTAL_FLAG && !!message.threadTs;
+      const isAssistantPaneDm = !!message.threadTs;
       const assistantThreadTs = isAssistantPaneDm ? message.threadTs : undefined;
 
       if (!isAssistantPaneDm) {
@@ -378,21 +376,13 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         progressStrategy === "none" || isAssistantPaneDm
           ? null
           : createSlackProgressTransport(slackBot, message.channelId, progressStrategy);
-      const showToolProgress = progressSettings.toolProgress !== "off";
       let assistantStatusChain: Promise<unknown> = Promise.resolve();
       const setAssistantStatusLine =
         isAssistantPaneDm && assistantThreadTs
-          ? (loadingMessage: string) => {
+          ? (status: string) => {
               assistantStatusChain = assistantStatusChain
                 .catch(() => undefined)
-                .then(() =>
-                  slackBot.setAssistantStatus(
-                    message.channelId,
-                    assistantThreadTs,
-                    loadingMessage,
-                    ASSISTANT_SHIMMER_POOL,
-                  ),
-                );
+                .then(() => slackBot.setAssistantStatus(message.channelId, assistantThreadTs, status));
               return assistantStatusChain;
             }
           : null;
@@ -403,14 +393,12 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
       };
       const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
-        const previousLines = progressRenderer.getLines();
+        const previousLast = progressRenderer.getLines().at(-1);
         progressRenderer.renderEvent(event);
         const lines = progressRenderer.getLines();
-        if (setAssistantStatusLine && showToolProgress && event.kind === "tool_use") {
-          const last = lines[lines.length - 1];
-          if (last && last !== previousLines[previousLines.length - 1]) {
-            void setAssistantStatusLine(last);
-          }
+        const last = lines.at(-1);
+        if (setAssistantStatusLine && last && last !== previousLast) {
+          void setAssistantStatusLine(last);
         }
         if (progressTransport) {
           await progressTransport.syncLines(lines);

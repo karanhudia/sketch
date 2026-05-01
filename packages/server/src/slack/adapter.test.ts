@@ -699,7 +699,7 @@ describe("slack/adapter", () => {
       await flush();
 
       expect(mockBotInstance.addReaction).not.toHaveBeenCalledWith("D1", "1", "eyes");
-      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "Thinking…", expect.any(Array));
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "Thinking…");
       expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("D1", "t1", "");
     });
 
@@ -724,12 +724,7 @@ describe("slack/adapter", () => {
         await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
         await flush();
 
-        expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith(
-          "D1",
-          "t1",
-          "📖 Flipping through some pages",
-          expect.any(Array),
-        );
+        expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "📖 Flipping through some pages");
       } finally {
         randomSpy.mockRestore();
       }
@@ -750,7 +745,44 @@ describe("slack/adapter", () => {
       await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
       await flush();
 
-      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", '📖 Read: "a.ts"', expect.any(Array));
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", '📖 Read: "a.ts"');
+    });
+
+    it("streams reasoning text into the shimmer when reasoningText is on", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi.fn().mockImplementation(async (params) => {
+          await params.onProgressEvent({ kind: "intermediate_text", text: "thinking about it" });
+          return makeAgentResult();
+        }),
+      });
+      vi.mocked(deps.repos.users.findBySlackId).mockResolvedValue(makeUser({ reasoning_text: 1 }));
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "💬 thinking about it");
+    });
+
+    it("collapses repeated tool calls into an (xN) multiplier in the shimmer", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi.fn().mockImplementation(async (params) => {
+          await params.onProgressEvent({ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } });
+          await params.onProgressEvent({ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } });
+          return makeAgentResult();
+        }),
+      });
+      vi.mocked(deps.repos.users.findBySlackId).mockResolvedValue(makeUser({ tool_progress: "technical" }));
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", '📖 Read: "a.ts" (x2)');
     });
 
     it("passes threadTs to runAgent for assistant-pane DMs", async () => {

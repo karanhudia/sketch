@@ -63,25 +63,6 @@ const FRIENDLY_MESSAGES: Record<string, string[]> = {
   ],
 };
 
-const SHIMMER_POOL_LIMIT = 10;
-
-export const ASSISTANT_SHIMMER_POOL: readonly string[] = (() => {
-  const seen = new Set<string>();
-  const pool: string[] = [];
-  const add = (phrase: string) => {
-    const text = phrase.trim();
-    if (!text || seen.has(text) || pool.length >= SHIMMER_POOL_LIMIT) return;
-    seen.add(text);
-    pool.push(text);
-  };
-  for (const phrase of FRIENDLY_MESSAGES.Fallback ?? []) add(phrase);
-  for (const [name, phrases] of Object.entries(FRIENDLY_MESSAGES)) {
-    if (name === "Fallback") continue;
-    if (phrases[0]) add(phrases[0]);
-  }
-  return pool;
-})();
-
 function buildTechnicalLine(toolName: string, input: Record<string, unknown>): string {
   const emoji = TOOL_EMOJI[toolName] ?? FALLBACK_EMOJI;
   const argKey = PRIMARY_ARG[toolName];

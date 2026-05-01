@@ -367,18 +367,13 @@ export class SlackBot {
     });
   }
 
-  async setAssistantStatus(
-    channelId: string,
-    threadTs: string,
-    status: string,
-    loadingMessages?: readonly string[],
-  ): Promise<void> {
+  async setAssistantStatus(channelId: string, threadTs: string, status: string): Promise<void> {
     try {
       await this.app.client.assistant.threads.setStatus({
         channel_id: channelId,
         thread_ts: threadTs,
         status,
-        ...(loadingMessages && loadingMessages.length > 0 ? { loading_messages: [...loadingMessages] } : {}),
+        ...(status ? { loading_messages: [status] } : {}),
       });
     } catch (err) {
       this.logger.warn({ err, channelId, threadTs }, "Slack assistant.threads.setStatus failed");
