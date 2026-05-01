@@ -379,14 +379,30 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           ? null
           : createSlackProgressTransport(slackBot, message.channelId, progressStrategy);
       const showToolProgress = progressSettings.toolProgress !== "off";
+      let assistantStatusChain: Promise<unknown> = Promise.resolve();
       const setAssistantStatusLine =
         isAssistantPaneDm && assistantThreadTs
-          ? (loadingMessage: string) =>
-              slackBot.setAssistantStatus(message.channelId, assistantThreadTs, loadingMessage, ASSISTANT_SHIMMER_POOL)
+          ? (loadingMessage: string) => {
+              assistantStatusChain = assistantStatusChain
+                .catch(() => undefined)
+                .then(() =>
+                  slackBot.setAssistantStatus(
+                    message.channelId,
+                    assistantThreadTs,
+                    loadingMessage,
+                    ASSISTANT_SHIMMER_POOL,
+                  ),
+                );
+              return assistantStatusChain;
+            }
           : null;
       if (setAssistantStatusLine) await setAssistantStatusLine("Thinking…");
+      const clearAssistantStatus = async () => {
+        if (!assistantThreadTs) return;
+        await assistantStatusChain.catch(() => undefined);
+        await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
+      };
       const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
-        if (event.kind === "intermediate_text") return;
         const previousLines = progressRenderer.getLines();
         progressRenderer.renderEvent(event);
         const lines = progressRenderer.getLines();
@@ -464,9 +480,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           }
         }
 
-        if (assistantThreadTs) {
-          await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
-        }
+        await clearAssistantStatus();
         if (!isAssistantPaneDm) {
           await slackBot.removeReaction(message.channelId, message.ts, "eyes");
           await slackBot.addReaction(message.channelId, message.ts, "white_check_mark");
@@ -484,9 +498,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       } catch (err) {
         logger.error({ err, userId: user.id }, "Agent run failed");
         await flushSlackProgressTransport(progressTransport, logger, { userId: user.id, channelId: message.channelId });
-        if (assistantThreadTs) {
-          await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
-        }
+        await clearAssistantStatus();
         if (!isAssistantPaneDm) {
           await slackBot.removeReaction(message.channelId, message.ts, "eyes");
         }
