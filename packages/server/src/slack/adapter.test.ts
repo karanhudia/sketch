@@ -142,6 +142,9 @@ function freshMockBot() {
     onMessage: vi.fn(),
     onThreadMessage: vi.fn(),
     onChannelMention: vi.fn(),
+    onAppHomeOpened: vi.fn(),
+    onHomeAction: vi.fn(),
+    publishHomeView: vi.fn().mockResolvedValue(undefined),
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
     postMessage: vi.fn().mockResolvedValue("new-ts"),
@@ -149,6 +152,7 @@ function freshMockBot() {
     updateMessage: vi.fn().mockResolvedValue(undefined),
     addReaction: vi.fn().mockResolvedValue(undefined),
     removeReaction: vi.fn().mockResolvedValue(undefined),
+    setAssistantStatus: vi.fn().mockResolvedValue(undefined),
     getUserInfo: vi.fn().mockResolvedValue({ name: "alice", realName: "Alice", email: "alice@test.com" }),
     getChannelInfo: vi.fn().mockResolvedValue({ name: "general", type: "channel" }),
     getChannelHistory: vi.fn().mockResolvedValue([]),
@@ -279,7 +283,7 @@ describe("slack/adapter", () => {
       await dm({ text: "make pdf", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
       await flush();
 
-      expect(mockBotInstance.uploadFile).toHaveBeenCalledWith("D1", "/tmp/out.pdf");
+      expect(mockBotInstance.uploadFile).toHaveBeenCalledWith("D1", "/tmp/out.pdf", undefined);
     });
 
     it("updates thinking message on agent error", async () => {
@@ -680,6 +684,162 @@ describe("slack/adapter", () => {
       await flush();
 
       expect(mockBotInstance.addReaction).toHaveBeenCalledWith("C1", "1", "eyes");
+    });
+  });
+
+  describe("Assistant-pane DM shimmer", () => {
+    it("calls setAssistantStatus and skips eyes/✅ reactions for DMs with a threadTs when EXPERIMENTAL_FLAG is on", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.addReaction).not.toHaveBeenCalledWith("D1", "1", "eyes");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "Thinking…", expect.any(Array));
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("D1", "t1", "");
+    });
+
+    it("streams tool-progress renderer output into the shimmer", async () => {
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+      try {
+        const deps = makeDeps({
+          config: createTestConfig({
+            DATA_DIR: "/tmp/test-data",
+            PORT: 0,
+            LOG_LEVEL: "error",
+            EXPERIMENTAL_FLAG: true,
+          }),
+          runAgent: vi.fn().mockImplementation(async (params) => {
+            await params.onProgressEvent({ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } });
+            return makeAgentResult();
+          }),
+        });
+        createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+        const { dm } = getHandlers();
+        await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+        await flush();
+
+        expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith(
+          "D1",
+          "t1",
+          "📖 Flipping through some pages",
+          expect.any(Array),
+        );
+      } finally {
+        randomSpy.mockRestore();
+      }
+    });
+
+    it("honors the selected tool-progress mode for Assistant shimmer text", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi.fn().mockImplementation(async (params) => {
+          await params.onProgressEvent({ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } });
+          return makeAgentResult();
+        }),
+      });
+      vi.mocked(deps.repos.users.findBySlackId).mockResolvedValue(makeUser({ tool_progress: "technical" }));
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", '📖 Read: "a.ts"', expect.any(Array));
+    });
+
+    it("passes threadTs to runAgent for assistant-pane DMs", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hello world", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
+      expect(agentCall.threadTs).toBe("t1");
+    });
+
+    it("posts the final reply inside the assistant thread", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.postThreadReply).toHaveBeenCalledWith("D1", "t1", "hello back");
+      expect(mockBotInstance.postMessage).not.toHaveBeenCalledWith("D1", expect.any(String));
+    });
+
+    it("posts _No response_ as a thread reply for assistant-pane DMs", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi
+          .fn()
+          .mockResolvedValue(makeAgentResult({ messageSent: false, trace: { progressEvents: [], finalText: null } })),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "quiet", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.postThreadReply).toHaveBeenCalledWith("D1", "t1", "_No response_");
+      expect(mockBotInstance.postMessage).not.toHaveBeenCalledWith("D1", "_No response_");
+    });
+
+    it("posts the error message as a thread reply for assistant-pane DMs", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi.fn().mockRejectedValue(new Error("boom")),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "crash", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.postThreadReply).toHaveBeenCalledWith("D1", "t1", "_Something went wrong, try again_");
+      expect(mockBotInstance.postMessage).not.toHaveBeenCalledWith("D1", "_Something went wrong, try again_");
+    });
+
+    it("uploads pending files inside the assistant thread", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+        runAgent: vi.fn().mockResolvedValue(makeAgentResult({ pendingUploads: ["/tmp/out.pdf"] })),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "make pdf", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.uploadFile).toHaveBeenCalledWith("D1", "/tmp/out.pdf", "t1");
+    });
+
+    it("does not pass threadTs to runAgent for top-level (no-thread) Messages-tab DMs", async () => {
+      const deps = makeDeps({
+        config: createTestConfig({ DATA_DIR: "/tmp/test-data", PORT: 0, LOG_LEVEL: "error", EXPERIMENTAL_FLAG: true }),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+
+      const { dm } = getHandlers();
+      await dm({ text: "hi", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
+      await flush();
+
+      const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
+      expect(agentCall.threadTs).toBeUndefined();
+      expect(mockBotInstance.addReaction).toHaveBeenCalledWith("D1", "1", "eyes");
     });
   });
 

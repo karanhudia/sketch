@@ -8,10 +8,12 @@ import type { Kysely } from "kysely";
 import { type InboxMessageContext, buildSketchContext } from "../agent/prompt";
 import type { AgentResult, McpServerConfig, RunAgentParams } from "../agent/runner";
 import { deleteSessionId, getSessionId } from "../agent/sessions";
-import { createProgressRenderer, getProgressTransportStrategy } from "../agent/tool-progress";
+import { ASSISTANT_SHIMMER_POOL, createProgressRenderer, getProgressTransportStrategy } from "../agent/tool-progress";
 import { ensureChannelWorkspace, ensureWorkspace } from "../agent/workspace";
 import {
+  REASONING_TEXT_OPTIONS,
   type ReasoningTextCommand,
+  TOOL_PROGRESS_OPTIONS,
   type ToolProgressCommand,
   getNewSessionConfirmation,
   getReasoningTextConfirmation,
@@ -41,6 +43,7 @@ import type { QueueManager } from "../queue";
 import type { TaskScheduler } from "../scheduler/service";
 import { slackApiCall } from "./api";
 import { SlackBot, type SlackFile } from "./bot";
+import { HOME_ACTION_REASONING_TEXT, HOME_ACTION_TOOL_PROGRESS, buildHomeView } from "./home";
 import { createSlackMessageHandler } from "./message-handler";
 import { createSlackProgressTransport } from "./progress-transport";
 import { SlackIdentityConflictError, resolveSlackUser } from "./resolve-user";
@@ -200,6 +203,56 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
     return { ids: rows.map((row) => row.id), messages };
   };
 
+  if (config.EXPERIMENTAL_FLAG) {
+    const publishHomeForUser = async (slackUserId: string): Promise<void> => {
+      let user: Awaited<ReturnType<typeof resolveUser>>;
+      try {
+        user = await resolveUser(slackUserId);
+      } catch (err) {
+        logger.warn({ err, slackUserId }, "Home tab: failed to resolve user");
+        return;
+      }
+      const settingsRow = await repos.settings.get();
+      const progress = resolveProgressDisplaySettings(user);
+      const view = buildHomeView({
+        realName: user.name,
+        email: user.email ?? null,
+        workspaceName: settingsRow?.org_name ?? null,
+        toolProgress: progress.toolProgress,
+        reasoningText: progress.reasoningText,
+      });
+      await slackBot.publishHomeView(slackUserId, view);
+    };
+
+    slackBot.onAppHomeOpened(async (event) => {
+      await publishHomeForUser(event.slackUserId);
+    });
+
+    slackBot.onHomeAction(async (event) => {
+      let user: Awaited<ReturnType<typeof resolveUser>>;
+      try {
+        user = await resolveUser(event.slackUserId);
+      } catch (err) {
+        logger.warn({ err, slackUserId: event.slackUserId, actionId: event.actionId }, "Home action: resolve failed");
+        return;
+      }
+
+      if (event.actionId === HOME_ACTION_TOOL_PROGRESS) {
+        const value = event.value;
+        if (TOOL_PROGRESS_OPTIONS.includes(value as ToolProgressCommand)) {
+          await repos.users.update(user.id, { toolProgress: value });
+        }
+      } else if (event.actionId === HOME_ACTION_REASONING_TEXT) {
+        const value = event.value;
+        if (REASONING_TEXT_OPTIONS.includes(value as ReasoningTextCommand)) {
+          await repos.users.update(user.id, { reasoningText: value === "on" });
+        }
+      }
+
+      await publishHomeForUser(event.slackUserId);
+    });
+  }
+
   // DM handler
   slackBot.onMessage(async (message) => {
     let user: Awaited<ReturnType<typeof resolveUser>>;
@@ -311,19 +364,41 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         );
       }
 
-      await slackBot.addReaction(message.channelId, message.ts, "eyes");
-      const onFinalMessage = createSlackMessageHandler(slackBot, message.channelId);
+      const isAssistantPaneDm = config.EXPERIMENTAL_FLAG && !!message.threadTs;
+      const assistantThreadTs = isAssistantPaneDm ? message.threadTs : undefined;
+
+      if (!isAssistantPaneDm) {
+        await slackBot.addReaction(message.channelId, message.ts, "eyes");
+      }
+      const onFinalMessage = createSlackMessageHandler(slackBot, message.channelId, assistantThreadTs);
       const progressSettings = resolveProgressDisplaySettings(user);
       const progressRenderer = createProgressRenderer(progressSettings);
       const progressStrategy = getProgressTransportStrategy(progressSettings);
       const progressTransport =
-        progressStrategy === "none"
+        progressStrategy === "none" || isAssistantPaneDm
           ? null
           : createSlackProgressTransport(slackBot, message.channelId, progressStrategy);
+      const showToolProgress = progressSettings.toolProgress !== "off";
+      const setAssistantStatusLine =
+        isAssistantPaneDm && assistantThreadTs
+          ? (loadingMessage: string) =>
+              slackBot.setAssistantStatus(message.channelId, assistantThreadTs, loadingMessage, ASSISTANT_SHIMMER_POOL)
+          : null;
+      if (setAssistantStatusLine) await setAssistantStatusLine("Thinking…");
       const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
-        if (!progressTransport) return;
+        if (event.kind === "intermediate_text") return;
+        const previousLines = progressRenderer.getLines();
         progressRenderer.renderEvent(event);
-        await progressTransport.syncLines(progressRenderer.getLines());
+        const lines = progressRenderer.getLines();
+        if (setAssistantStatusLine && showToolProgress && event.kind === "tool_use") {
+          const last = lines[lines.length - 1];
+          if (last && last !== previousLines[previousLines.length - 1]) {
+            void setAssistantStatusLine(last);
+          }
+        }
+        if (progressTransport) {
+          await progressTransport.syncLines(lines);
+        }
       };
 
       const integrationMcpServers = await buildMcpServers(user.email);
@@ -352,6 +427,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           logger,
           platform: "slack",
           onProgressEvent,
+          ...(assistantThreadTs ? { threadTs: assistantThreadTs } : {}),
           orgName: settingsRow?.org_name,
           botName: settingsRow?.bot_name,
           attachments: attachments.length > 0 ? attachments : undefined,
@@ -382,25 +458,43 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
 
         for (const filePath of result.pendingUploads) {
           try {
-            await slackBot.uploadFile(message.channelId, filePath);
+            await slackBot.uploadFile(message.channelId, filePath, assistantThreadTs);
           } catch (err) {
             logger.warn({ err, filePath }, "Failed to upload file to Slack");
           }
         }
 
-        await slackBot.removeReaction(message.channelId, message.ts, "eyes");
-        await slackBot.addReaction(message.channelId, message.ts, "white_check_mark");
+        if (assistantThreadTs) {
+          await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
+        }
+        if (!isAssistantPaneDm) {
+          await slackBot.removeReaction(message.channelId, message.ts, "eyes");
+          await slackBot.addReaction(message.channelId, message.ts, "white_check_mark");
+        }
         if (pendingInbox.ids.length > 0 && inboxMessagesRepo) {
           await inboxMessagesRepo.markConsumed(pendingInbox.ids);
         }
         if (!result.trace.finalText) {
-          await slackBot.postMessage(message.channelId, "_No response_");
+          if (assistantThreadTs) {
+            await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_No response_");
+          } else {
+            await slackBot.postMessage(message.channelId, "_No response_");
+          }
         }
       } catch (err) {
         logger.error({ err, userId: user.id }, "Agent run failed");
         await flushSlackProgressTransport(progressTransport, logger, { userId: user.id, channelId: message.channelId });
-        await slackBot.removeReaction(message.channelId, message.ts, "eyes");
-        await slackBot.postMessage(message.channelId, "_Something went wrong, try again_");
+        if (assistantThreadTs) {
+          await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
+        }
+        if (!isAssistantPaneDm) {
+          await slackBot.removeReaction(message.channelId, message.ts, "eyes");
+        }
+        if (assistantThreadTs) {
+          await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_Something went wrong, try again_");
+        } else {
+          await slackBot.postMessage(message.channelId, "_Something went wrong, try again_");
+        }
       }
     });
   });
