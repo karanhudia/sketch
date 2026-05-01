@@ -286,7 +286,7 @@ describe("slack/adapter", () => {
       expect(mockBotInstance.uploadFile).toHaveBeenCalledWith("D1", "/tmp/out.pdf", undefined);
     });
 
-    it("updates thinking message on agent error", async () => {
+    it("clears the shimmer and posts an error reply on agent error", async () => {
       const deps = makeDeps({
         runAgent: vi.fn().mockRejectedValue(new Error("boom")),
       });
@@ -296,11 +296,11 @@ describe("slack/adapter", () => {
       await dm({ text: "crash", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
       await flush();
 
-      expect(mockBotInstance.removeReaction).toHaveBeenCalled();
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("D1", "1", "");
       expect(mockBotInstance.postMessage).toHaveBeenCalledWith("D1", "_Something went wrong, try again_");
     });
 
-    it("flushes buffered progress before posting the DM error reply", async () => {
+    it("clears the shimmer before posting the DM error reply", async () => {
       const deps = makeDeps({
         runAgent: vi.fn().mockImplementation(async (params) => {
           await params.onProgressEvent({ kind: "tool_use", toolName: "Read", input: { file_path: "a.ts" } });
@@ -314,14 +314,17 @@ describe("slack/adapter", () => {
       await dm({ text: "crash", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
       await flush();
 
-      expect(mockBotInstance.updateMessage).toHaveBeenCalled();
       const errorCallIndex = mockBotInstance.postMessage.mock.calls.findIndex(
         ([channelId, text]) => channelId === "D1" && text === "_Something went wrong, try again_",
       );
       expect(errorCallIndex).toBeGreaterThanOrEqual(0);
       const errorOrder = mockBotInstance.postMessage.mock.invocationCallOrder[errorCallIndex];
-      const flushOrder = mockBotInstance.updateMessage.mock.invocationCallOrder.at(-1);
-      expect(flushOrder).toBeLessThan(errorOrder);
+      const clearCallIndex = mockBotInstance.setAssistantStatus.mock.calls.findIndex(
+        ([channelId, , status]) => channelId === "D1" && status === "",
+      );
+      expect(clearCallIndex).toBeGreaterThanOrEqual(0);
+      const clearOrder = mockBotInstance.setAssistantStatus.mock.invocationCallOrder[clearCallIndex];
+      expect(clearOrder).toBeLessThan(errorOrder);
     });
 
     it("shows _No response_ when agent sends nothing", async () => {
@@ -675,7 +678,7 @@ describe("slack/adapter", () => {
       expect(agentCall.userMessage).toContain("<sender>Alice (alice@test.com)</sender>");
     });
 
-    it("adds eyes reaction on channel mention", async () => {
+    it("starts the shimmer on channel mention", async () => {
       const deps = makeDeps();
       createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
       const { mention } = getHandlers();
@@ -683,7 +686,8 @@ describe("slack/adapter", () => {
       await mention({ text: "help", userId: "S1", channelId: "C1", ts: "1", type: "channel_mention" });
       await flush();
 
-      expect(mockBotInstance.addReaction).toHaveBeenCalledWith("C1", "1", "eyes");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("C1", "1", "Thinking…");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("C1", "1", "");
     });
   });
 
@@ -871,7 +875,7 @@ describe("slack/adapter", () => {
 
       const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
       expect(agentCall.threadTs).toBeUndefined();
-      expect(mockBotInstance.addReaction).toHaveBeenCalledWith("D1", "1", "eyes");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "1", "Thinking…");
     });
   });
 

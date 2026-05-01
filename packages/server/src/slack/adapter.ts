@@ -8,7 +8,7 @@ import type { Kysely } from "kysely";
 import { type InboxMessageContext, buildSketchContext } from "../agent/prompt";
 import type { AgentResult, McpServerConfig, RunAgentParams } from "../agent/runner";
 import { deleteSessionId, getSessionId } from "../agent/sessions";
-import { createProgressRenderer, getProgressTransportStrategy } from "../agent/tool-progress";
+import { createProgressRenderer } from "../agent/tool-progress";
 import { ensureChannelWorkspace, ensureWorkspace } from "../agent/workspace";
 import {
   REASONING_TEXT_OPTIONS,
@@ -33,6 +33,7 @@ import type { DB } from "../db/schema";
 import { type Attachment, downloadSlackFile } from "../files";
 import type { Logger } from "../logger";
 import {
+  type ProgressDisplaySettings,
   getUnknownReasoningTextMessage,
   getUnknownToolProgressMessage,
   isReasoningTextCommand,
@@ -45,7 +46,6 @@ import { slackApiCall } from "./api";
 import { SlackBot, type SlackFile } from "./bot";
 import { HOME_ACTION_REASONING_TEXT, HOME_ACTION_TOOL_PROGRESS, buildHomeView } from "./home";
 import { createSlackMessageHandler } from "./message-handler";
-import { createSlackProgressTransport } from "./progress-transport";
 import { SlackIdentityConflictError, resolveSlackUser } from "./resolve-user";
 import type { BufferedMessage, ThreadBuffer } from "./thread-buffer";
 import type { UserCache } from "./user-cache";
@@ -121,18 +121,65 @@ async function downloadSlackFiles(
   return attachments;
 }
 
-async function flushSlackProgressTransport(
-  progressTransport: { flush(): Promise<void> } | null,
-  logger: Logger,
-  context: { userId?: string; channelId?: string; threadTs?: string },
-) {
-  if (!progressTransport) return;
+async function downloadMessageAttachments(params: {
+  files: SlackFile[] | undefined;
+  workspaceDir: string;
+  botToken: string | null | undefined;
+  maxBytes: number;
+  logger: Logger;
+}): Promise<Attachment[]> {
+  const { files, workspaceDir, botToken, maxBytes, logger } = params;
+  if (!files?.length) return [];
 
-  try {
-    await progressTransport.flush();
-  } catch (err) {
-    logger.warn({ err, ...context }, "Failed to flush Slack progress updates");
-  }
+  logger.debug(
+    {
+      fileCount: files.length,
+      files: files.map((f) => ({
+        name: f.name,
+        mime: f.mimetype,
+        size: f.size,
+        url: f.urlPrivate?.slice(0, 80),
+      })),
+    },
+    "Files received from Slack",
+  );
+
+  const attachments = await downloadSlackFiles(files, botToken, join(workspaceDir, "attachments"), maxBytes, logger);
+
+  logger.debug(
+    {
+      attachmentCount: attachments.length,
+      attachments: attachments.map((a) => ({ name: a.originalName, mime: a.mimeType, size: a.sizeBytes })),
+    },
+    "Files downloaded",
+  );
+
+  return attachments;
+}
+
+function createShimmer(
+  slackBot: SlackBot,
+  channelId: string,
+  threadTs: string,
+  progressSettings: ProgressDisplaySettings,
+) {
+  const renderer = createProgressRenderer(progressSettings);
+  let chain: Promise<unknown> = slackBot.setAssistantStatus(channelId, threadTs, "Thinking…");
+  const setLine = (status: string) => {
+    chain = chain.catch(() => undefined).then(() => slackBot.setAssistantStatus(channelId, threadTs, status));
+    return chain;
+  };
+  const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
+    const previousLast = renderer.getLines().at(-1);
+    renderer.renderEvent(event);
+    const last = renderer.getLines().at(-1);
+    if (last && last !== previousLast) void setLine(last);
+  };
+  const clear = async () => {
+    await chain.catch(() => undefined);
+    await slackBot.setAssistantStatus(channelId, threadTs, "");
+  };
+  return { onProgressEvent, clear };
 }
 
 export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: string }, deps: SlackAdapterDeps) {
@@ -329,81 +376,24 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       const workspaceDir = await ensureWorkspace(config, user.id);
       const settingsRow = await repos.settings.get();
 
-      // Download any attached files
-      let attachments: Attachment[] = [];
-      if (message.files?.length) {
-        logger.debug(
-          {
-            fileCount: message.files.length,
-            files: message.files.map((f) => ({
-              name: f.name,
-              mime: f.mimetype,
-              size: f.size,
-              url: f.urlPrivate?.slice(0, 80),
-            })),
-          },
-          "Files received from Slack",
-        );
-        const attachDir = join(workspaceDir, "attachments");
-        const maxBytes = maxFileBytes;
-        attachments = await downloadSlackFiles(
-          message.files,
-          settingsRow?.slack_bot_token,
-          attachDir,
-          maxBytes,
-          logger,
-        );
-        logger.debug(
-          {
-            attachmentCount: attachments.length,
-            attachments: attachments.map((a) => ({ name: a.originalName, mime: a.mimeType, size: a.sizeBytes })),
-          },
-          "Files downloaded",
-        );
-      }
+      const attachments = await downloadMessageAttachments({
+        files: message.files,
+        workspaceDir,
+        botToken: settingsRow?.slack_bot_token,
+        maxBytes: maxFileBytes,
+        logger,
+      });
 
-      const isAssistantPaneDm = !!message.threadTs;
-      const assistantThreadTs = isAssistantPaneDm ? message.threadTs : undefined;
+      const assistantThreadTs = message.threadTs;
+      const shimmerThreadTs = message.threadTs ?? message.ts;
 
-      if (!isAssistantPaneDm) {
-        await slackBot.addReaction(message.channelId, message.ts, "eyes");
-      }
       const onFinalMessage = createSlackMessageHandler(slackBot, message.channelId, assistantThreadTs);
-      const progressSettings = resolveProgressDisplaySettings(user);
-      const progressRenderer = createProgressRenderer(progressSettings);
-      const progressStrategy = getProgressTransportStrategy(progressSettings);
-      const progressTransport =
-        progressStrategy === "none" || isAssistantPaneDm
-          ? null
-          : createSlackProgressTransport(slackBot, message.channelId, progressStrategy);
-      let assistantStatusChain: Promise<unknown> = Promise.resolve();
-      const setAssistantStatusLine =
-        isAssistantPaneDm && assistantThreadTs
-          ? (status: string) => {
-              assistantStatusChain = assistantStatusChain
-                .catch(() => undefined)
-                .then(() => slackBot.setAssistantStatus(message.channelId, assistantThreadTs, status));
-              return assistantStatusChain;
-            }
-          : null;
-      if (setAssistantStatusLine) await setAssistantStatusLine("Thinking…");
-      const clearAssistantStatus = async () => {
-        if (!assistantThreadTs) return;
-        await assistantStatusChain.catch(() => undefined);
-        await slackBot.setAssistantStatus(message.channelId, assistantThreadTs, "");
-      };
-      const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
-        const previousLast = progressRenderer.getLines().at(-1);
-        progressRenderer.renderEvent(event);
-        const lines = progressRenderer.getLines();
-        const last = lines.at(-1);
-        if (setAssistantStatusLine && last && last !== previousLast) {
-          void setAssistantStatusLine(last);
-        }
-        if (progressTransport) {
-          await progressTransport.syncLines(lines);
-        }
-      };
+      const { onProgressEvent, clear: clearAssistantStatus } = createShimmer(
+        slackBot,
+        message.channelId,
+        shimmerThreadTs,
+        resolveProgressDisplaySettings(user),
+      );
 
       const integrationMcpServers = await buildMcpServers(user.email);
       const pendingInbox = await loadPendingInboxMessages(user.id);
@@ -455,7 +445,6 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           sendDm,
         });
 
-        await flushSlackProgressTransport(progressTransport, logger, { userId: user.id, channelId: message.channelId });
         if (result.trace.finalText) {
           await onFinalMessage(result.trace.finalText);
         }
@@ -469,10 +458,6 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         }
 
         await clearAssistantStatus();
-        if (!isAssistantPaneDm) {
-          await slackBot.removeReaction(message.channelId, message.ts, "eyes");
-          await slackBot.addReaction(message.channelId, message.ts, "white_check_mark");
-        }
         if (pendingInbox.ids.length > 0 && inboxMessagesRepo) {
           await inboxMessagesRepo.markConsumed(pendingInbox.ids);
         }
@@ -485,11 +470,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         }
       } catch (err) {
         logger.error({ err, userId: user.id }, "Agent run failed");
-        await flushSlackProgressTransport(progressTransport, logger, { userId: user.id, channelId: message.channelId });
         await clearAssistantStatus();
-        if (!isAssistantPaneDm) {
-          await slackBot.removeReaction(message.channelId, message.ts, "eyes");
-        }
         if (assistantThreadTs) {
           await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_Something went wrong, try again_");
         } else {
@@ -544,7 +525,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       logger.info({ slackUserId: message.userId, channelId: message.channelId }, "Processing channel mention");
 
       let user: Awaited<ReturnType<typeof resolveUser>> | undefined;
-      let progressTransport: ReturnType<typeof createSlackProgressTransport> | null = null;
+      let clearAssistantStatus: (() => Promise<void>) | null = null;
 
       try {
         user = await resolveUser(message.userId);
@@ -614,38 +595,13 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
 
         slackDeps.threadBuffer.register(message.channelId, threadTs);
 
-        // Download any attached files
-        let attachments: Attachment[] = [];
-        if (message.files?.length) {
-          logger.debug(
-            {
-              fileCount: message.files.length,
-              files: message.files.map((f) => ({
-                name: f.name,
-                mime: f.mimetype,
-                size: f.size,
-                url: f.urlPrivate?.slice(0, 80),
-              })),
-            },
-            "Files received from Slack",
-          );
-          const attachDir = join(workspaceDir, "attachments");
-          const maxBytes = maxFileBytes;
-          attachments = await downloadSlackFiles(
-            message.files,
-            settingsRow?.slack_bot_token,
-            attachDir,
-            maxBytes,
-            logger,
-          );
-          logger.debug(
-            {
-              attachmentCount: attachments.length,
-              attachments: attachments.map((a) => ({ name: a.originalName, mime: a.mimeType, size: a.sizeBytes })),
-            },
-            "Files downloaded",
-          );
-        }
+        const attachments = await downloadMessageAttachments({
+          files: message.files,
+          workspaceDir,
+          botToken: settingsRow?.slack_bot_token,
+          maxBytes: maxFileBytes,
+          logger,
+        });
 
         const channelWorkspaceKey = `channel-${message.channelId}`;
         const existingSession = await getSessionId(db, channelWorkspaceKey, threadTs);
@@ -697,20 +653,10 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           });
         }
 
-        await slackBot.addReaction(message.channelId, message.ts, "eyes");
         const onFinalMessage = createSlackMessageHandler(slackBot, message.channelId, threadTs);
-        const progressSettings = resolveProgressDisplaySettings(channel);
-        const progressRenderer = createProgressRenderer(progressSettings);
-        const progressStrategy = getProgressTransportStrategy(progressSettings);
-        progressTransport =
-          progressStrategy === "none"
-            ? null
-            : createSlackProgressTransport(slackBot, message.channelId, progressStrategy, threadTs);
-        const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
-          if (!progressTransport) return;
-          progressRenderer.renderEvent(event);
-          await progressTransport.syncLines(progressRenderer.getLines());
-        };
+        const shimmer = createShimmer(slackBot, message.channelId, threadTs, resolveProgressDisplaySettings(channel));
+        clearAssistantStatus = shimmer.clear;
+        const onProgressEvent = shimmer.onProgressEvent;
 
         const integrationMcpServers = await buildMcpServers(user.email);
 
@@ -750,11 +696,6 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           sendDm,
         });
 
-        await flushSlackProgressTransport(progressTransport, logger, {
-          userId: user.id,
-          channelId: message.channelId,
-          threadTs,
-        });
         if (result.trace.finalText) {
           await onFinalMessage(result.trace.finalText);
         }
@@ -767,8 +708,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           }
         }
 
-        await slackBot.removeReaction(message.channelId, message.ts, "eyes");
-        await slackBot.addReaction(message.channelId, message.ts, "white_check_mark");
+        await clearAssistantStatus?.();
         if (!result.trace.finalText) {
           await slackBot.postThreadReply(message.channelId, threadTs, "_No response_");
         }
@@ -792,12 +732,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           return;
         }
         logger.error({ err, channelId: message.channelId }, "Channel mention handler failed");
-        await flushSlackProgressTransport(progressTransport, logger, {
-          userId: user?.id,
-          channelId: message.channelId,
-          threadTs,
-        });
-        await slackBot.removeReaction(message.channelId, message.ts, "eyes");
+        await clearAssistantStatus?.();
         await slackBot.postThreadReply(message.channelId, threadTs, "_Something went wrong, try again_");
       }
     });
