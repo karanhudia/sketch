@@ -92,6 +92,29 @@ describe("createProgressRenderer", () => {
     );
     expect(lines).toEqual(["⚙️ Working on it"]);
   });
+
+  it("strips the mcp__<server>__ prefix when picking the friendly pool", () => {
+    const { lines } = renderEvents(
+      { toolProgress: "friendly", reasoningText: false },
+      [{ kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } }],
+      () => 0,
+    );
+    expect(lines).toEqual(["📦 Wrapping up a file for you"]);
+  });
+
+  it("strips the mcp__<server>__ prefix in technical mode and renders the bare name with primary arg", () => {
+    const { lines } = renderEvents({ toolProgress: "technical", reasoningText: false }, [
+      { kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } },
+    ]);
+    expect(lines).toEqual(['📎 SendFileToChat: "a.ts"']);
+  });
+
+  it("strips the mcp__<server>__ prefix in verbose mode and renders the bare name with full input", () => {
+    const { lines } = renderEvents({ toolProgress: "verbose", reasoningText: false }, [
+      { kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } },
+    ]);
+    expect(lines).toEqual(['📎 SendFileToChat: {"file_path":"a.ts"}']);
+  });
 });
 
 describe("getProgressTransportStrategy", () => {
