@@ -20,6 +20,14 @@ import type { Logger } from "../logger";
 
 const SLACK_LOADING_MESSAGE_LIMIT = 50;
 
+export function parseSlackHttpBody(rawBody: string, contentType: string | undefined): Record<string, unknown> {
+  const isFormEncoded = contentType?.toLowerCase().includes("application/x-www-form-urlencoded");
+  if (!isFormEncoded) return JSON.parse(rawBody);
+  const payload = new URLSearchParams(rawBody).get("payload");
+  if (!payload) throw new Error("Form-encoded Slack request missing 'payload' field");
+  return JSON.parse(payload);
+}
+
 export function clipForSlackLoading(text: string): string {
   const codePoints = Array.from(text);
   if (codePoints.length <= SLACK_LOADING_MESSAGE_LIMIT) return text;
@@ -316,7 +324,7 @@ export class SlackBot {
       },
     });
 
-    const body = JSON.parse(rawBody);
+    const body = parseSlackHttpBody(rawBody, headers["content-type"]);
 
     if (body.type === "url_verification") {
       return { challenge: body.challenge };
