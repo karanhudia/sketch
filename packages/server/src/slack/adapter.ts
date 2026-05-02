@@ -397,28 +397,33 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       const shimmerThreadTs = message.threadTs ?? message.ts;
 
       const onFinalMessage = createSlackMessageHandler(slackBot, message.channelId, assistantThreadTs);
-      const { onProgressEvent, clear: clearAssistantStatus } = createShimmer(
-        slackBot,
-        message.channelId,
-        shimmerThreadTs,
-        resolveProgressDisplaySettings(user),
-      );
-
-      const integrationMcpServers = await buildMcpServers(user.email);
-      const pendingInbox = await loadPendingInboxMessages(user.id);
-
-      const userMessage = buildSketchContext({
-        messages: [],
-        currentUserName: user.name,
-        currentMessage: message.text || "See attached files.",
-        currentUserEmail: user.email,
-        workspaceDir,
-        orgDir: config.CLAUDE_CONFIG_DIR,
-        isSharedContext: false,
-        inboxMessages: pendingInbox.messages,
-      });
+      let clearAssistantStatus: (() => Promise<void>) | null = null;
+      let pendingInbox: Awaited<ReturnType<typeof loadPendingInboxMessages>> | null = null;
 
       try {
+        const shimmer = createShimmer(
+          slackBot,
+          message.channelId,
+          shimmerThreadTs,
+          resolveProgressDisplaySettings(user),
+        );
+        clearAssistantStatus = shimmer.clear;
+        const { onProgressEvent } = shimmer;
+
+        const integrationMcpServers = await buildMcpServers(user.email);
+        pendingInbox = await loadPendingInboxMessages(user.id);
+
+        const userMessage = buildSketchContext({
+          messages: [],
+          currentUserName: user.name,
+          currentMessage: message.text || "See attached files.",
+          currentUserEmail: user.email,
+          workspaceDir,
+          orgDir: config.CLAUDE_CONFIG_DIR,
+          isSharedContext: false,
+          inboxMessages: pendingInbox.messages,
+        });
+
         const result = await runAgent({
           db,
           workspaceKey: user.id,
@@ -467,7 +472,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         }
 
         await clearAssistantStatus();
-        if (pendingInbox.ids.length > 0 && inboxMessagesRepo) {
+        if (pendingInbox && pendingInbox.ids.length > 0 && inboxMessagesRepo) {
           await inboxMessagesRepo.markConsumed(pendingInbox.ids);
         }
         if (!result.trace.finalText) {
@@ -479,7 +484,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         }
       } catch (err) {
         logger.error({ err, userId: user.id }, "Agent run failed");
-        await clearAssistantStatus();
+        await clearAssistantStatus?.();
         if (assistantThreadTs) {
           await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_Something went wrong, try again_");
         } else {

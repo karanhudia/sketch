@@ -300,6 +300,21 @@ describe("slack/adapter", () => {
       expect(mockBotInstance.postMessage).toHaveBeenCalledWith("D1", "_Something went wrong, try again_");
     });
 
+    it("clears the shimmer when pre-runAgent setup throws (e.g. buildMcpServers)", async () => {
+      const deps = makeDeps({
+        buildMcpServers: vi.fn().mockRejectedValue(new Error("mcp config bad")),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const { dm } = getHandlers();
+
+      await dm({ text: "crash", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "1", "💭 Thinking…");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("D1", "1", "");
+      expect(mockBotInstance.postMessage).toHaveBeenCalledWith("D1", "_Something went wrong, try again_");
+    });
+
     it("clears the shimmer before posting the DM error reply", async () => {
       const deps = makeDeps({
         runAgent: vi.fn().mockImplementation(async (params) => {
