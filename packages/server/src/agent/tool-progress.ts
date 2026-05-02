@@ -64,7 +64,7 @@ const FRIENDLY_MESSAGES: Record<string, string[]> = {
 };
 
 function stripMcpPrefix(toolName: string): string {
-  return toolName.replace(/^mcp__[^_]+__/, "");
+  return toolName.replace(/^mcp__.+?__/, "");
 }
 
 function buildTechnicalLine(toolName: string, input: Record<string, unknown>): string {

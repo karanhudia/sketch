@@ -115,6 +115,29 @@ describe("createProgressRenderer", () => {
     ]);
     expect(lines).toEqual(['📎 SendFileToChat: {"file_path":"a.ts"}']);
   });
+
+  it("strips the mcp__<server>__ prefix when the server segment contains underscores", () => {
+    const { lines } = renderEvents({ toolProgress: "technical", reasoningText: false }, [
+      { kind: "tool_use", toolName: "mcp__plugin_pipedream__SendFileToChat", input: { file_path: "a.ts" } },
+    ]);
+    expect(lines).toEqual(['📎 SendFileToChat: "a.ts"']);
+  });
+
+  it("strips the mcp__<server>__ prefix only up to the first __ so underscores in the tool name survive", () => {
+    const { lines } = renderEvents({ toolProgress: "verbose", reasoningText: false }, [
+      { kind: "tool_use", toolName: "mcp__google_drive__list_files", input: { folder: "root" } },
+    ]);
+    expect(lines).toEqual(['⚙️ list_files: {"folder":"root"}']);
+  });
+
+  it("strips the mcp__<server>__ prefix in friendly mode for an underscored server", () => {
+    const { lines } = renderEvents(
+      { toolProgress: "friendly", reasoningText: false },
+      [{ kind: "tool_use", toolName: "mcp__plugin_pipedream__SendFileToChat", input: {} }],
+      () => 0,
+    );
+    expect(lines).toEqual(["📦 Wrapping up a file for you"]);
+  });
 });
 
 describe("getProgressTransportStrategy", () => {
