@@ -309,6 +309,11 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
 
   // DM handler
   slackBot.onMessage(async (message) => {
+    const replyToUser = (text: string): Promise<unknown> =>
+      message.threadTs
+        ? slackBot.postThreadReply(message.channelId, message.threadTs, text)
+        : slackBot.postMessage(message.channelId, text);
+
     let user: Awaited<ReturnType<typeof resolveUser>>;
     try {
       user = await resolveUser(message.userId);
@@ -323,8 +328,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           },
           "Skipping DM because Slack identity conflicts with an existing user",
         );
-        await slackBot.postMessage(
-          message.channelId,
+        await replyToUser(
           "I can't reply right now because your Slack account mapping conflicts with an existing Sketch identity. Please ask your admin to reconnect Slack for your workspace.",
         );
         return;
@@ -339,38 +343,35 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       const command = parseSketchCommand(message.text);
       if (command === "new_session") {
         await deleteSessionId(db, user.id);
-        await slackBot.postMessage(message.channelId, getNewSessionConfirmation());
+        await replyToUser(getNewSessionConfirmation());
         return;
       }
 
       if (!command && isToolProgressCommand(message.text)) {
-        await slackBot.postMessage(message.channelId, getUnknownToolProgressMessage(message.text));
+        await replyToUser(getUnknownToolProgressMessage(message.text));
         return;
       }
 
       if (!command && isReasoningTextCommand(message.text)) {
-        await slackBot.postMessage(message.channelId, getUnknownReasoningTextMessage(message.text));
+        await replyToUser(getUnknownReasoningTextMessage(message.text));
         return;
       }
 
       const currentProgressSettings = resolveProgressDisplaySettings(user);
       if (command === "tool_progress_query") {
-        await slackBot.postMessage(message.channelId, getToolProgressCurrent(currentProgressSettings));
+        await replyToUser(getToolProgressCurrent(currentProgressSettings));
         return;
       }
 
       if (command === "reasoning_text_query") {
-        await slackBot.postMessage(message.channelId, getReasoningTextCurrent(currentProgressSettings));
+        await replyToUser(getReasoningTextCurrent(currentProgressSettings));
         return;
       }
 
       const requestedToolProgress = resolveCommandToolProgress(command);
       if (requestedToolProgress) {
         await repos.users.update(user.id, { toolProgress: requestedToolProgress });
-        await slackBot.postMessage(
-          message.channelId,
-          getToolProgressConfirmation(requestedToolProgress, currentProgressSettings.reasoningText),
-        );
+        await replyToUser(getToolProgressConfirmation(requestedToolProgress, currentProgressSettings.reasoningText));
         return;
       }
 
@@ -378,7 +379,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       if (requestedReasoningText) {
         const enabled = requestedReasoningText === "on";
         await repos.users.update(user.id, { reasoningText: enabled });
-        await slackBot.postMessage(message.channelId, getReasoningTextConfirmation(enabled));
+        await replyToUser(getReasoningTextConfirmation(enabled));
         return;
       }
 
@@ -476,20 +477,12 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
           await inboxMessagesRepo.markConsumed(pendingInbox.ids);
         }
         if (!result.trace.finalText) {
-          if (assistantThreadTs) {
-            await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_No response_");
-          } else {
-            await slackBot.postMessage(message.channelId, "_No response_");
-          }
+          await replyToUser("_No response_");
         }
       } catch (err) {
         logger.error({ err, userId: user.id }, "Agent run failed");
         await clearAssistantStatus?.();
-        if (assistantThreadTs) {
-          await slackBot.postThreadReply(message.channelId, assistantThreadTs, "_Something went wrong, try again_");
-        } else {
-          await slackBot.postMessage(message.channelId, "_Something went wrong, try again_");
-        }
+        await replyToUser("_Something went wrong, try again_");
       }
     });
   });

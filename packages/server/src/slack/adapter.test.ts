@@ -408,6 +408,22 @@ describe("slack/adapter", () => {
       );
     });
 
+    it("routes the /new confirmation through the active thread when the DM has a threadTs", async () => {
+      const deps = makeDeps();
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const { dm } = getHandlers();
+
+      await dm({ text: "/new", userId: "S1", channelId: "D1", ts: "1", threadTs: "t1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.postThreadReply).toHaveBeenCalledWith(
+        "D1",
+        "t1",
+        expect.stringMatching(new RegExp(`^(${NEW_SESSION_CONFIRMATIONS.map((m) => escapeRegExp(m)).join("|")})$`)),
+      );
+      expect(mockBotInstance.postMessage).not.toHaveBeenCalled();
+    });
+
     it("updates the DM user's tool progress on /toolprogress", async () => {
       const deps = makeDeps();
       createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
