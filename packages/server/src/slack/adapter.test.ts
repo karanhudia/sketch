@@ -686,7 +686,7 @@ describe("slack/adapter", () => {
       await mention({ text: "help", userId: "S1", channelId: "C1", ts: "1", type: "channel_mention" });
       await flush();
 
-      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("C1", "1", "Thinking…");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("C1", "1", "💭 Thinking…");
       expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("C1", "1", "");
     });
   });
@@ -703,7 +703,7 @@ describe("slack/adapter", () => {
       await flush();
 
       expect(mockBotInstance.addReaction).not.toHaveBeenCalledWith("D1", "1", "eyes");
-      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "Thinking…");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "t1", "💭 Thinking…");
       expect(mockBotInstance.setAssistantStatus).toHaveBeenLastCalledWith("D1", "t1", "");
     });
 
@@ -875,7 +875,7 @@ describe("slack/adapter", () => {
 
       const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
       expect(agentCall.threadTs).toBeUndefined();
-      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "1", "Thinking…");
+      expect(mockBotInstance.setAssistantStatus).toHaveBeenCalledWith("D1", "1", "💭 Thinking…");
     });
   });
 

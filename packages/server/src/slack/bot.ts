@@ -18,6 +18,14 @@ import { App, verifySlackRequest } from "@slack/bolt";
 import type { Receiver } from "@slack/bolt";
 import type { Logger } from "../logger";
 
+const SLACK_LOADING_MESSAGE_LIMIT = 50;
+
+export function clipForSlackLoading(text: string): string {
+  const codePoints = Array.from(text);
+  if (codePoints.length <= SLACK_LOADING_MESSAGE_LIMIT) return text;
+  return `${codePoints.slice(0, SLACK_LOADING_MESSAGE_LIMIT - 1).join("")}…`;
+}
+
 /**
  * No-op Receiver used in HTTP mode. Bolt requires a receiver instance but we
  * handle event ingestion ourselves via processHttpRequest().
@@ -372,8 +380,8 @@ export class SlackBot {
       await this.app.client.assistant.threads.setStatus({
         channel_id: channelId,
         thread_ts: threadTs,
-        status,
-        ...(status ? { loading_messages: [status] } : {}),
+        status: status ? "is thinking..." : "",
+        ...(status ? { loading_messages: [clipForSlackLoading(status)] } : {}),
       });
     } catch (err) {
       this.logger.warn({ err, channelId, threadTs }, "Slack assistant.threads.setStatus failed");

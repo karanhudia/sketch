@@ -157,6 +157,8 @@ async function downloadMessageAttachments(params: {
   return attachments;
 }
 
+const SHIMMER_HEARTBEAT_MS = 45_000;
+
 function createShimmer(
   slackBot: SlackBot,
   channelId: string,
@@ -164,11 +166,16 @@ function createShimmer(
   progressSettings: ProgressDisplaySettings,
 ) {
   const renderer = createProgressRenderer(progressSettings);
-  let chain: Promise<unknown> = slackBot.setAssistantStatus(channelId, threadTs, "Thinking…");
+  let currentLine = "💭 Thinking…";
+  let chain: Promise<unknown> = slackBot.setAssistantStatus(channelId, threadTs, currentLine);
   const setLine = (status: string) => {
+    currentLine = status;
     chain = chain.catch(() => undefined).then(() => slackBot.setAssistantStatus(channelId, threadTs, status));
     return chain;
   };
+  const heartbeat = setInterval(() => {
+    if (currentLine) void setLine(currentLine);
+  }, SHIMMER_HEARTBEAT_MS);
   const onProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
     const previousLast = renderer.getLines().at(-1);
     renderer.renderEvent(event);
@@ -176,6 +183,8 @@ function createShimmer(
     if (last && last !== previousLast) void setLine(last);
   };
   const clear = async () => {
+    clearInterval(heartbeat);
+    currentLine = "";
     await chain.catch(() => undefined);
     await slackBot.setAssistantStatus(channelId, threadTs, "");
   };
