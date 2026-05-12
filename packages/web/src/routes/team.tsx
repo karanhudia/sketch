@@ -21,6 +21,7 @@ import { Button } from "@sketch/ui/components/button";
 import { Card, CardContent } from "@sketch/ui/components/card";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { TabButton } from "@sketch/ui/components/tab-button";
+import { TabContentContainer } from "@sketch/ui/components/tab-content-container";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@sketch/ui/components/tooltip";
 import { getInitials } from "@sketch/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -77,31 +78,27 @@ export function TeamPage() {
         </div>
       </div>
 
-      <div className="mt-5">
+      <TabContentContainer className="mt-5">
         {activeTab === "list" ? (
-          <div className="mx-auto w-full max-w-4xl">
-            {isLoading ? (
-              <LoadingSkeleton />
-            ) : users.length === 0 ? (
-              <EmptyState onAdd={() => setShowAddDialog(true)} />
-            ) : (
-              <MemberList
-                users={users}
-                auth={auth}
-                onEdit={setEditingUser}
-                onRemove={setRemovingUser}
-                onLink={setLinkingUser}
-              />
-            )}
-          </div>
-        ) : isLoading ? (
-          <div className="mx-auto w-full max-w-4xl">
+          isLoading ? (
             <LoadingSkeleton />
-          </div>
+          ) : users.length === 0 ? (
+            <EmptyState onAdd={() => setShowAddDialog(true)} />
+          ) : (
+            <MemberList
+              users={users}
+              auth={auth}
+              onEdit={setEditingUser}
+              onRemove={setRemovingUser}
+              onLink={setLinkingUser}
+            />
+          )
+        ) : isLoading ? (
+          <LoadingSkeleton />
         ) : (
           <OrgChart users={users} />
         )}
-      </div>
+      </TabContentContainer>
 
       <AddMemberDialog
         open={showAddDialog}

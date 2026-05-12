@@ -27,6 +27,7 @@ import { api } from "@/lib/api";
 import { PlusIcon } from "@phosphor-icons/react";
 import type { AgentEnvironmentVariableRecord, McpServerRecord } from "@sketch/shared";
 import { TabButton } from "@sketch/ui/components/tab-button";
+import { TabContentContainer } from "@sketch/ui/components/tab-content-container";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
@@ -143,7 +144,7 @@ function ConnectionsPage() {
         />
       </div>
 
-      <div className="mt-5 space-y-8">
+      <TabContentContainer className="mt-5 space-y-8">
         {isLoading || (activeTab === "environment" && envVarsQuery.isLoading) ? (
           <LoadingSkeleton />
         ) : activeTab === "applications" ? (
@@ -211,7 +212,7 @@ function ConnectionsPage() {
             onDelete={setDeletingEnvVar}
           />
         )}
-      </div>
+      </TabContentContainer>
 
       <AddMcpDialog open={showAddMcpDialog} onOpenChange={setShowAddMcpDialog} onSuccess={invalidateAll} />
 
