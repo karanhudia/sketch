@@ -25,9 +25,7 @@ export const REASONING_TEXT_OPTIONS = ["on", "off"] as const;
 export const TOOL_PROGRESS_LABELS: Record<ToolProgressCommand, string> = {
   off: "Off",
   friendly: "Friendly",
-  concise: "Concise",
   technical: "Technical",
-  verbose: "Verbose",
 };
 
 export const REASONING_TEXT_LABELS: Record<ReasoningTextCommand, string> = {
