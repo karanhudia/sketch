@@ -115,15 +115,12 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const trackedRunAgent = async (params: RunAgentParams): Promise<AgentResult> => {
     const runId = randomUUID();
     const span = tracer.startSpan("chat sketch");
-    const shouldInjectAgentEnv = params.contextType === "dm" && !!params.currentUserId;
-    const agentEnv = shouldInjectAgentEnv
-      ? removeReservedAgentEnv(await agentEnvironmentVariables.listForRuntime(params.currentUserId as string))
-      : undefined;
+    const resolvedAgentEnv = removeReservedAgentEnv(await agentEnvironmentVariables.listForRuntimeContext(params));
     const enrichedParams = {
       ...params,
-      ...(agentEnv && Object.keys(agentEnv).length > 0
+      ...(Object.keys(resolvedAgentEnv).length > 0
         ? {
-            agentEnv,
+            agentEnv: resolvedAgentEnv,
           }
         : {}),
     };
@@ -273,7 +270,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     runAgent: trackedRunAgent,
     buildMcpServers,
     loadIntegrationProvider,
-    listAgentEnvForRuntime: (userId) => agentEnvironmentVariables.listForRuntime(userId),
+    listAgentEnvForRuntime: (context) => agentEnvironmentVariables.listForRuntimeContext(context),
     automationRunsRepo,
     stepContentRepo,
     userRepo: users,
@@ -349,7 +346,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     runAgent: trackedRunAgent,
     buildMcpServers,
     loadIntegrationProvider,
-    listAgentEnvForRuntime: (userId) => agentEnvironmentVariables.listForRuntime(userId),
+    listAgentEnvForRuntime: (context) => agentEnvironmentVariables.listForRuntimeContext(context),
     stepContentRepo,
     automationRunsRepo,
     queueManager,
