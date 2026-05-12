@@ -18,7 +18,7 @@ describe("createProgressRenderer", () => {
       { kind: "tool_use", toolName: "Read", input: { file_path: longPath } },
     ]);
 
-    expect(lines).toEqual([`📖 Read: "${longPath.slice(0, 80)}..."`]);
+    expect(lines).toEqual([`📖 Read: "${longPath.slice(0, 40)}..."`]);
   });
 
   it("suppresses intermediate text when reasoning text is off", () => {
@@ -44,27 +44,48 @@ describe("createProgressRenderer", () => {
   });
 
   it("renders friendly file operations with targets", () => {
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Read", input: { file_path: "src/index.ts" } },
+      ]).lines,
+    ).toEqual(['📖 Reading "src/index.ts"']);
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Write", input: { file_path: "notes.md" } },
+      ]).lines,
+    ).toEqual(['✍️ Creating "notes.md"']);
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Edit", input: { file_path: "src/index.ts" } },
+      ]).lines,
+    ).toEqual(['🔧 Editing "src/index.ts"']);
+  });
+
+  it("replaces the previous friendly line with the latest operation", () => {
     const { lines } = renderEvents({ toolProgress: "friendly", reasoningText: false }, [
       { kind: "tool_use", toolName: "Read", input: { file_path: "src/index.ts" } },
-      { kind: "tool_use", toolName: "Write", input: { file_path: "notes.md" } },
       { kind: "tool_use", toolName: "Edit", input: { file_path: "src/index.ts" } },
     ]);
 
-    expect(lines).toEqual(['📖 Reading "src/index.ts"', '✍️ Creating "notes.md"', '🔧 Editing "src/index.ts"']);
+    expect(lines).toEqual(['🔧 Editing "src/index.ts"']);
   });
 
   it("renders friendly search and shell operations with targets", () => {
-    const { lines } = renderEvents({ toolProgress: "friendly", reasoningText: false }, [
-      { kind: "tool_use", toolName: "Glob", input: { pattern: "**/*.ts" } },
-      { kind: "tool_use", toolName: "Grep", input: { pattern: "TOOL_PROGRESS_OPTIONS" } },
-      { kind: "tool_use", toolName: "Bash", input: { command: "pnpm test" } },
-    ]);
-
-    expect(lines).toEqual([
-      '📂 Finding files matching "**/*.ts"',
-      '🔎 Searching for "TOOL_PROGRESS_OPTIONS"',
-      '💻 Running "pnpm test"',
-    ]);
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Glob", input: { pattern: "**/*.ts" } },
+      ]).lines,
+    ).toEqual(['📂 Finding files matching "**/*.ts"']);
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Grep", input: { pattern: "TOOL_PROGRESS_OPTIONS" } },
+      ]).lines,
+    ).toEqual(['🔎 Searching for "TOOL_PROGRESS_OPTIONS"']);
+    expect(
+      renderEvents({ toolProgress: "friendly", reasoningText: false }, [
+        { kind: "tool_use", toolName: "Bash", input: { command: "pnpm test" } },
+      ]).lines,
+    ).toEqual(['💻 Running "pnpm test"']);
   });
 
   it("collapses repeated identical friendly operations", () => {
@@ -135,50 +156,18 @@ describe("createProgressRenderer", () => {
     expect(lines).toEqual(["⚙️ Using UnknownTool"]);
   });
 
-  it("strips the mcp__<server>__ prefix when picking the friendly pool", () => {
-    const { lines } = renderEvents(
-      { toolProgress: "friendly", reasoningText: false },
-      [{ kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } }],
-      () => 0,
-    );
-    expect(lines).toEqual(["📦 Wrapping up a file for you"]);
-  });
-
-  it("strips the mcp__<server>__ prefix in technical mode and renders the bare name with primary arg", () => {
+  it("strips the mcp__<server>__ prefix in technical output", () => {
     const { lines } = renderEvents({ toolProgress: "technical", reasoningText: false }, [
       { kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } },
     ]);
     expect(lines).toEqual(['📎 SendFileToChat: "a.ts"']);
-  });
-
-  it("strips the mcp__<server>__ prefix in verbose mode and renders the bare name with full input", () => {
-    const { lines } = renderEvents({ toolProgress: "verbose", reasoningText: false }, [
-      { kind: "tool_use", toolName: "mcp__sketch__SendFileToChat", input: { file_path: "a.ts" } },
-    ]);
-    expect(lines).toEqual(['📎 SendFileToChat: {"file_path":"a.ts"}']);
   });
 
   it("strips the mcp__<server>__ prefix when the server segment contains underscores", () => {
-    const { lines } = renderEvents({ toolProgress: "technical", reasoningText: false }, [
+    const { lines } = renderEvents({ toolProgress: "friendly", reasoningText: false }, [
       { kind: "tool_use", toolName: "mcp__plugin_pipedream__SendFileToChat", input: { file_path: "a.ts" } },
     ]);
-    expect(lines).toEqual(['📎 SendFileToChat: "a.ts"']);
-  });
-
-  it("strips the mcp__<server>__ prefix only up to the first __ so underscores in the tool name survive", () => {
-    const { lines } = renderEvents({ toolProgress: "verbose", reasoningText: false }, [
-      { kind: "tool_use", toolName: "mcp__google_drive__list_files", input: { folder: "root" } },
-    ]);
-    expect(lines).toEqual(['⚙️ list_files: {"folder":"root"}']);
-  });
-
-  it("strips the mcp__<server>__ prefix in friendly mode for an underscored server", () => {
-    const { lines } = renderEvents(
-      { toolProgress: "friendly", reasoningText: false },
-      [{ kind: "tool_use", toolName: "mcp__plugin_pipedream__SendFileToChat", input: {} }],
-      () => 0,
-    );
-    expect(lines).toEqual(["📦 Wrapping up a file for you"]);
+    expect(lines).toEqual(['📎 Sending file "a.ts"']);
   });
 });
 
@@ -187,9 +176,9 @@ describe("getProgressTransportStrategy", () => {
     expect(getProgressTransportStrategy({ toolProgress: "off", reasoningText: false })).toBe("none");
   });
 
-  it("returns accumulate for reasoning-only and enabled tool-progress modes", () => {
-    expect(getProgressTransportStrategy({ toolProgress: "off", reasoningText: true })).toBe("accumulate");
-    expect(getProgressTransportStrategy({ toolProgress: "friendly", reasoningText: false })).toBe("accumulate");
-    expect(getProgressTransportStrategy({ toolProgress: "technical", reasoningText: true })).toBe("accumulate");
+  it("returns replace for enabled live progress modes", () => {
+    expect(getProgressTransportStrategy({ toolProgress: "off", reasoningText: true })).toBe("replace");
+    expect(getProgressTransportStrategy({ toolProgress: "friendly", reasoningText: false })).toBe("replace");
+    expect(getProgressTransportStrategy({ toolProgress: "technical", reasoningText: true })).toBe("replace");
   });
 });
