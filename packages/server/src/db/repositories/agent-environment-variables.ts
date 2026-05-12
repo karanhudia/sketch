@@ -263,6 +263,10 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
       const env: Record<string, string> = {};
       const dmUserId = params.currentUserId ?? params.taskContext?.createdBy ?? null;
       const isDmContext = params.contextType === "dm" || params.taskContext?.contextType === "dm";
+      const scheduledTaskCreatorId =
+        params.contextType === "scheduled_task"
+          ? (params.taskContext?.createdBy ?? params.currentUserId ?? null)
+          : null;
 
       await applySharedEnv(env, { type: "org", id: "default" });
 
@@ -273,6 +277,10 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
         await applySharedEnv(env, { type: "slack_channel", id: params.taskContext.deliveryTarget });
       } else if (params.taskContext?.platform === "whatsapp" && params.taskContext.contextType === "group") {
         await applySharedEnv(env, { type: "whatsapp_group", id: params.taskContext.deliveryTarget });
+      }
+
+      if (!isDmContext && scheduledTaskCreatorId) {
+        await applyOwnedEnv(env, scheduledTaskCreatorId);
       }
 
       return env;

@@ -152,6 +152,29 @@ describe("Agent environment variable repository sharing", () => {
     expect(groupEnv).toEqual({ ROUTE_TOKEN: "group" });
   });
 
+  it("preserves creator-owned private variables for scheduled channel and group workflows", async () => {
+    const channelVar = await repo.create("other-owner", { name: "ROUTE_TOKEN", value: "channel", isSecret: true });
+    const groupVar = await repo.create("group-owner", { name: "ROUTE_TOKEN", value: "group", isSecret: true });
+    await repo.create("recipient", { name: "PRIVATE_TOKEN", value: "private", isSecret: true });
+
+    await repo.replaceShares(channelVar.id, "other-owner", "other-owner", [{ type: "slack_channel", id: "C123" }]);
+    await repo.replaceShares(groupVar.id, "group-owner", "group-owner", [{ type: "whatsapp_group", id: "123@g.us" }]);
+
+    const channelEnv = await repo.listForRuntimeContext({
+      currentUserId: "recipient",
+      contextType: "scheduled_task",
+      taskContext: { platform: "slack", contextType: "channel", deliveryTarget: "C123", createdBy: "recipient" },
+    });
+    const groupEnv = await repo.listForRuntimeContext({
+      currentUserId: "recipient",
+      contextType: "scheduled_task",
+      taskContext: { platform: "whatsapp", contextType: "group", deliveryTarget: "123@g.us", createdBy: "recipient" },
+    });
+
+    expect(channelEnv).toEqual({ ROUTE_TOKEN: "channel", PRIVATE_TOKEN: "private" });
+    expect(groupEnv).toEqual({ ROUTE_TOKEN: "group", PRIVATE_TOKEN: "private" });
+  });
+
   it("returns null when replacing shares for a variable not owned by the user", async () => {
     const variable = await repo.create("owner", { name: "API_TOKEN", value: "secret", isSecret: true });
 
