@@ -233,7 +233,7 @@ function FilesPage() {
   });
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
+    <div className="mx-auto box-content max-w-4xl px-10 py-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold">Files</h1>
