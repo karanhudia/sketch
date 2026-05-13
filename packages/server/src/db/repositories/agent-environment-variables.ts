@@ -65,8 +65,8 @@ function serialize(
     created_at: string;
     updated_at: string;
   },
-  encryptionKey?: string,
-  shares: AgentEnvironmentVariableShareRecord[] = [],
+  encryptionKey: string | undefined,
+  shares: AgentEnvironmentVariableShareRecord[],
 ): AgentEnvironmentVariableRecord {
   const isSecret = row.is_secret === 1;
   return {
@@ -262,6 +262,16 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
       return Object.fromEntries(rows.map((row) => [row.name, decryptAgentEnvValue(row.value, encryptionKey)]));
     },
 
+    async existsForOwner(id: string, userId: string): Promise<boolean> {
+      const row = await db
+        .selectFrom("agent_environment_variables")
+        .select("id")
+        .where("id", "=", id)
+        .where("user_id", "=", userId)
+        .executeTakeFirst();
+      return Boolean(row);
+    },
+
     async listForRuntimeContext(params: AgentEnvironmentRuntimeContext): Promise<Record<string, string>> {
       const env: Record<string, string> = {};
       const dmUserId = params.currentUserId ?? params.taskContext?.createdBy ?? null;
@@ -309,7 +319,7 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
         .where("id", "=", id)
         .where("user_id", "=", userId)
         .executeTakeFirstOrThrow();
-      return serialize(row, encryptionKey);
+      return serialize(row, encryptionKey, []);
     },
 
     async updateValue(id: string, userId: string, value: string): Promise<AgentEnvironmentVariableRecord | null> {
@@ -325,7 +335,9 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
         .where("id", "=", id)
         .where("user_id", "=", userId)
         .executeTakeFirst();
-      return row ? serialize(row, encryptionKey) : null;
+      if (!row) return null;
+      const shares = await listSharesForVariables(db, [id]);
+      return serialize(row, encryptionKey, shares.get(id) ?? []);
     },
 
     async replaceShares(

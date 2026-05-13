@@ -251,6 +251,61 @@ describe("Agent environment variables API", () => {
     ]);
   });
 
+  it("preserves share metadata in variable update responses", async () => {
+    await seedSlackChannel(db, "C123", "eng");
+    const create = await app.request("/api/agent-environment-variables", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: memberCookie },
+      body: JSON.stringify({ name: "PATCH_TOKEN", value: "secret", isSecret: true }),
+    });
+    const created = await create.json();
+
+    const share = await app.request(`/api/agent-environment-variables/${created.variable.id}/shares`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: memberCookie },
+      body: JSON.stringify({ targets: [{ type: "slack_channel", id: "C123" }] }),
+    });
+    expect(share.status).toBe(200);
+
+    const update = await app.request(`/api/agent-environment-variables/${created.variable.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: memberCookie },
+      body: JSON.stringify({ value: "updated-secret" }),
+    });
+
+    expect(update.status).toBe(200);
+    expect((await update.json()).variable.shares).toEqual([
+      expect.objectContaining({ targetType: "slack_channel", targetId: "C123", targetLabel: "#eng" }),
+    ]);
+  });
+
+  it("checks variable ownership before validating share targets", async () => {
+    const getChannelInfo = vi.fn().mockResolvedValue({ name: "eng", type: "public_channel" });
+    const slack = { getChannelInfo } as unknown as SlackBot;
+    app = createApp(db, createTestConfig({ ENCRYPTION_KEY }), {
+      logger: createTestLogger(),
+      getSlack: () => slack,
+    });
+    memberCookie = await login(app, MEMBER_EMAIL);
+    otherCookie = await login(app, OTHER_EMAIL);
+
+    const create = await app.request("/api/agent-environment-variables", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: memberCookie },
+      body: JSON.stringify({ name: "OWNED_TOKEN", value: "secret", isSecret: true }),
+    });
+    const created = await create.json();
+
+    const nonOwner = await app.request(`/api/agent-environment-variables/${created.variable.id}/shares`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: otherCookie },
+      body: JSON.stringify({ targets: [{ type: "slack_channel", id: "CNEW" }] }),
+    });
+
+    expect(nonOwner.status).toBe(404);
+    expect(getChannelInfo).not.toHaveBeenCalled();
+  });
+
   it("allows admins to create org-wide shares and rejects org-wide shares from members", async () => {
     const memberVariable = await app.request("/api/agent-environment-variables", {
       method: "POST",

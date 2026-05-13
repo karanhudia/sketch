@@ -166,6 +166,11 @@ export function agentEnvironmentRoutes(envVars: AgentEnvironmentRepo, deps: Agen
       return c.json(validationError(message), 400);
     }
 
+    const isOwned = await envVars.existsForOwner(c.req.param("id"), c.get("sub"));
+    if (!isOwned) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Environment variable not found" } }, 404);
+    }
+
     const validation = await validateShareTargets(parsed.data.targets, deps, c.get("role"));
     if (validation) {
       return c.json(validationError(validation.message), validation.status);
