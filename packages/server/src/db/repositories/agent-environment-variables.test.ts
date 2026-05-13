@@ -127,6 +127,25 @@ describe("Agent environment variable repository sharing", () => {
     expect(env).toEqual({ SHARED_TOKEN: "org", USER_TOKEN: "user", PREF: "own" });
   });
 
+  it("skips org-shared variables when org scope is disabled", async () => {
+    const orgVar = await repo.create("owner", { name: "ORG_TOKEN", value: "org", isSecret: true });
+    await repo.replaceShares(orgVar.id, "owner", "owner", [{ type: "org", id: "default" }]);
+
+    const env = await repo.listForRuntimeContext({
+      currentUserId: "recipient",
+      contextType: "dm",
+      allowOrgSharedEnv: false,
+      taskContext: {
+        platform: "whatsapp",
+        contextType: "dm",
+        deliveryTarget: "123@s.whatsapp.net",
+        createdBy: "recipient",
+      },
+    });
+
+    expect(env).toEqual({});
+  });
+
   it("resolves channel and group runtime env without requester-owned private variables", async () => {
     const orgVar = await repo.create("owner", { name: "ROUTE_TOKEN", value: "org", isSecret: true });
     const channelVar = await repo.create("other-owner", { name: "ROUTE_TOKEN", value: "channel", isSecret: true });

@@ -376,6 +376,7 @@ function buildAgentEnvironmentRuntimeContext(task: ScheduledTaskRow): AgentEnvir
   return {
     currentUserId: task.created_by,
     contextType: "scheduled_task",
+    allowOrgSharedEnv: true,
     taskContext: {
       platform,
       contextType,

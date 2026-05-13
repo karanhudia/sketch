@@ -115,7 +115,12 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const trackedRunAgent = async (params: RunAgentParams): Promise<AgentResult> => {
     const runId = randomUUID();
     const span = tracer.startSpan("chat sketch");
-    const resolvedAgentEnv = removeReservedAgentEnv(await agentEnvironmentVariables.listForRuntimeContext(params));
+    const resolvedAgentEnv = removeReservedAgentEnv(
+      await agentEnvironmentVariables.listForRuntimeContext({
+        ...params,
+        allowOrgSharedEnv: params.claudeConfigDir !== undefined,
+      }),
+    );
     const enrichedParams = {
       ...params,
       ...(Object.keys(resolvedAgentEnv).length > 0

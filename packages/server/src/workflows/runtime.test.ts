@@ -368,6 +368,7 @@ describe("executeAutomation action steps", () => {
     expect(listAgentEnvForRuntime).toHaveBeenCalledWith({
       currentUserId: "user-1",
       contextType: "scheduled_task",
+      allowOrgSharedEnv: true,
       taskContext: { platform: "slack", contextType: "dm", deliveryTarget: "D123", createdBy: "user-1" },
     });
     expect(onEvent).toHaveBeenCalledWith(

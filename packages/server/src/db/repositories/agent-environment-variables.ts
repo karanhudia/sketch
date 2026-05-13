@@ -27,6 +27,7 @@ export interface AgentEnvironmentVariableRecord {
 export interface AgentEnvironmentRuntimeContext {
   currentUserId?: string | null;
   contextType?: "dm" | "channel_mention" | "scheduled_task";
+  allowOrgSharedEnv?: boolean;
   taskContext?: {
     platform: "slack" | "whatsapp";
     contextType: "dm" | "channel" | "group";
@@ -270,7 +271,9 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
           ? (params.taskContext?.createdBy ?? params.currentUserId ?? null)
           : null;
 
-      await applySharedEnv(env, { type: "org", id: "default" });
+      if (params.allowOrgSharedEnv !== false) {
+        await applySharedEnv(env, { type: "org", id: "default" });
+      }
 
       if (isDmContext && dmUserId) {
         await applySharedEnv(env, { type: "user", id: dmUserId });
