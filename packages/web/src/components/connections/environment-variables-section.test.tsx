@@ -69,6 +69,53 @@ describe("ShareEnvironmentVariableDialog", () => {
     expect(screen.getByText("#engineering")).toBeInTheDocument();
     expect(screen.queryByText("C05JK4ZK7M5")).not.toBeInTheDocument();
   });
+
+  it("shows WhatsApp group names without exposing group JIDs", async () => {
+    renderDialog({
+      whatsappGroups: [
+        {
+          jid: "12025550123-123@g.us",
+          name: "Ops escalation",
+          description: null,
+          agent_user_id: null,
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Ops escalation")).toBeInTheDocument();
+    expect(screen.queryByText("12025550123-123@g.us")).not.toBeInTheDocument();
+  });
+
+  it("does not fall back to user IDs when a user has no email", async () => {
+    renderDialog({
+      users: [
+        {
+          id: "user-internal-id",
+          name: "No Email User",
+          email: null,
+          email_verified_at: null,
+          auth_role: "member",
+          slack_user_id: null,
+          whatsapp_number: null,
+          description: null,
+          type: "human",
+          role: null,
+          reports_to: null,
+          allowed_tools: null,
+          slack_channel_ids: [],
+          whatsapp_group_jids: [],
+          is_whatsapp_fallback: false,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("No Email User")).toBeInTheDocument();
+    expect(screen.queryByText("user-internal-id")).not.toBeInTheDocument();
+  });
 });
 
 describe("EnvironmentVariablesSection", () => {

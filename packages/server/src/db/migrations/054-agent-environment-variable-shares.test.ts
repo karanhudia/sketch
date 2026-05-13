@@ -17,6 +17,7 @@ interface MigrationTestDb {
   agent_environment_variable_shares: {
     id: string;
     variable_id: string;
+    variable_name: string;
     target_type: string;
     target_id: string;
     created_by: string;
@@ -73,6 +74,7 @@ describe("054-agent-environment-variable-shares migration", () => {
       .values({
         id: "share-1",
         variable_id: "var-1",
+        variable_name: "API_TOKEN",
         target_type: "slack_channel",
         target_id: "C123",
         created_by: "creator",
@@ -85,6 +87,7 @@ describe("054-agent-environment-variable-shares migration", () => {
         .values({
           id: "share-2",
           variable_id: "var-1",
+          variable_name: "API_TOKEN",
           target_type: "slack_channel",
           target_id: "C123",
           created_by: "creator",
@@ -96,6 +99,47 @@ describe("054-agent-environment-variable-shares migration", () => {
 
     const shares = await db.selectFrom("agent_environment_variable_shares").selectAll().execute();
     expect(shares).toEqual([]);
+  });
+
+  it("enforces one variable name per share target", async () => {
+    await up(db as Kysely<unknown>);
+
+    await db.insertInto("users").values({ id: "first-owner", name: "First Owner" }).execute();
+    await db.insertInto("users").values({ id: "second-owner", name: "Second Owner" }).execute();
+    await db
+      .insertInto("agent_environment_variables")
+      .values({ id: "var-1", user_id: "first-owner", name: "API_TOKEN", value: "secret" })
+      .execute();
+    await db
+      .insertInto("agent_environment_variables")
+      .values({ id: "var-2", user_id: "second-owner", name: "API_TOKEN", value: "other-secret" })
+      .execute();
+
+    await db
+      .insertInto("agent_environment_variable_shares")
+      .values({
+        id: "share-1",
+        variable_id: "var-1",
+        variable_name: "API_TOKEN",
+        target_type: "slack_channel",
+        target_id: "C123",
+        created_by: "first-owner",
+      })
+      .execute();
+
+    await expect(
+      db
+        .insertInto("agent_environment_variable_shares")
+        .values({
+          id: "share-2",
+          variable_id: "var-2",
+          variable_name: "API_TOKEN",
+          target_type: "slack_channel",
+          target_id: "C123",
+          created_by: "second-owner",
+        })
+        .execute(),
+    ).rejects.toThrow();
   });
 
   it("drops the share grants table", async () => {

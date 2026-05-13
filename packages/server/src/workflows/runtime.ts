@@ -386,7 +386,6 @@ function buildAgentEnvironmentRuntimeContext(task: ScheduledTaskRow): AgentEnvir
 }
 
 function buildRunAgentTaskContext(task: ScheduledTaskRow): RunAgentParams["taskContext"] | undefined {
-  if (!task.created_by) return undefined;
   const runtimeContext = buildAgentEnvironmentRuntimeContext(task).taskContext;
   if (!runtimeContext) return undefined;
   return {

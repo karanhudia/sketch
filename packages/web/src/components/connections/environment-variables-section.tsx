@@ -579,7 +579,7 @@ export function ShareEnvironmentVariableDialog({
                 <ShareTargetCheckbox
                   key={user.id}
                   title={user.name}
-                  subtitle={user.email ?? user.id}
+                  subtitle={user.email ?? undefined}
                   checked={selected.has(shareTargetKey("user", user.id))}
                   disabled={saveMutation.isPending}
                   onCheckedChange={(checked) => toggleTarget({ type: "user", id: user.id }, checked)}
@@ -618,7 +618,6 @@ export function ShareEnvironmentVariableDialog({
                 <ShareTargetCheckbox
                   key={group.jid}
                   title={group.name}
-                  subtitle={group.jid}
                   checked={selected.has(shareTargetKey("whatsapp_group", group.jid))}
                   disabled={saveMutation.isPending}
                   onCheckedChange={(checked) => toggleTarget({ type: "whatsapp_group", id: group.jid }, checked)}

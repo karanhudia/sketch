@@ -202,6 +202,34 @@ describe("executeAutomation agent steps", () => {
     expect(params.sendMessage).toHaveBeenCalledWith("sketch result");
   });
 
+  it("keeps channel task context for creator-less sketch-mode agent steps", async () => {
+    const runAgent = vi.fn().mockResolvedValue({
+      pendingUploads: [],
+      toolCalls: [],
+      trace: { finalText: "sketch result" },
+    });
+    const params = makeParams({
+      runAgent,
+      task: makeTask({
+        platform: "slack",
+        context_type: "channel",
+        delivery_target: "C123",
+        created_by: null,
+      }),
+    });
+
+    await executeAutomation(params as never);
+
+    const call = runAgent.mock.calls[0][0];
+    expect(call.currentUserId).toBeNull();
+    expect(call.taskContext).toEqual({
+      platform: "slack",
+      contextType: "channel",
+      deliveryTarget: "C123",
+      createdBy: null,
+    });
+  });
+
   it("keeps light-mode agent steps on the lightweight SDK path", async () => {
     const runAgent = vi.fn();
     const params = makeParams({

@@ -100,7 +100,9 @@ function normalizeTargets(targets: AgentEnvironmentShareTargetInput[]): AgentEnv
 
 function fallbackTargetLabel(targetType: AgentEnvironmentShareTargetType, targetId: string): string {
   if (targetType === "org") return "Entire org";
-  if (targetType === "slack_channel") return `#${targetId}`;
+  if (targetType === "slack_channel") return "Slack channel";
+  if (targetType === "whatsapp_group") return "WhatsApp group";
+  if (targetType === "user") return "User";
   return targetId;
 }
 
@@ -130,7 +132,7 @@ async function getTargetLabels(db: Kysely<DB>, targets: AgentEnvironmentShareTar
     for (const channel of channels) {
       labels.set(`slack_channel:${channel.slack_channel_id}`, {
         label: `#${channel.name}`,
-        secondaryLabel: channel.slack_channel_id,
+        secondaryLabel: null,
       });
     }
   }
@@ -142,7 +144,7 @@ async function getTargetLabels(db: Kysely<DB>, targets: AgentEnvironmentShareTar
       .where("jid", "in", whatsappGroupJids)
       .execute();
     for (const group of groups) {
-      labels.set(`whatsapp_group:${group.jid}`, { label: group.name, secondaryLabel: group.jid });
+      labels.set(`whatsapp_group:${group.jid}`, { label: group.name, secondaryLabel: null });
     }
   }
 
@@ -172,7 +174,7 @@ async function listSharesForVariables(
     const target = { type: targetType, id: row.target_id };
     const label = labels.get(targetKey(target)) ?? {
       label: fallbackTargetLabel(targetType, row.target_id),
-      secondaryLabel: targetType === "org" ? null : row.target_id,
+      secondaryLabel: null,
     };
     const share: AgentEnvironmentVariableShareRecord = {
       id: row.id,
@@ -378,6 +380,7 @@ export function createAgentEnvironmentVariableRepository(db: Kysely<DB>, encrypt
             .values({
               id: randomUUID(),
               variable_id: id,
+              variable_name: variable.name,
               target_type: target.type,
               target_id: target.id,
               created_by: createdByUserId,

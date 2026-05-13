@@ -222,6 +222,7 @@ export interface AgentEnvironmentVariablesTable {
 export interface AgentEnvironmentVariableSharesTable {
   id: string;
   variable_id: string;
+  variable_name: string;
   target_type: string;
   target_id: string;
   created_by: string;

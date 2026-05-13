@@ -7,6 +7,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .addColumn("variable_id", "text", (col) =>
       col.notNull().references("agent_environment_variables.id").onDelete("cascade"),
     )
+    .addColumn("variable_name", "text", (col) => col.notNull())
     .addColumn("target_type", "text", (col) => col.notNull())
     .addColumn("target_id", "text", (col) => col.notNull())
     .addColumn("created_by", "text", (col) => col.notNull().references("users.id").onDelete("cascade"))
@@ -17,6 +18,13 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("idx_agent_environment_variable_shares_unique_target")
     .on("agent_environment_variable_shares")
     .columns(["variable_id", "target_type", "target_id"])
+    .unique()
+    .execute();
+
+  await db.schema
+    .createIndex("idx_agent_environment_variable_shares_unique_target_name")
+    .on("agent_environment_variable_shares")
+    .columns(["target_type", "target_id", "variable_name"])
     .unique()
     .execute();
 
